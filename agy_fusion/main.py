@@ -14,17 +14,8 @@ from orchestrator_cli import run_fusion
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
 
-async def main():
-    if len(sys.argv) < 2:
-        print("Usage: fusion '<task_description>'")
-        sys.exit(1)
-        
-    task_description = sys.argv[1]
-    
-    print("[*] Initializing Token Load Balancer (TLB)...")
-    tlb.init_db()
-    
-    print(f"[*] Task: {task_description}")
+async def process_task(task_description):
+    print(f"\n[*] Task: {task_description}")
     blueprint = await run_fusion(task_description)
     
     if blueprint:
@@ -39,6 +30,38 @@ async def main():
         print(f"\n[*] Blueprint saved to {blueprint_path}")
     else:
         print("\n[!] Fusion process failed.")
+
+async def main():
+    print("[*] Initializing Token Load Balancer (TLB)...")
+    tlb.init_db()
+    
+    if len(sys.argv) > 1:
+        # Join all arguments so quotes are not strictly required
+        task_description = " ".join(sys.argv[1:])
+        await process_task(task_description)
+    else:
+        # Interactive REPL mode
+        print("="*50)
+        print("AgyFusion 2.0 Interactive CLI")
+        print("="*50)
+        print("Type your task and press Enter. (Type 'exit', Ctrl+C, or Ctrl+D to quit)")
+        try:
+            import readline
+        except ImportError:
+            pass
+            
+        while True:
+            try:
+                task_description = input("\nfusion> ").strip()
+                if not task_description:
+                    continue
+                if task_description.lower() in ['exit', 'quit']:
+                    print("Goodbye!")
+                    break
+                await process_task(task_description)
+            except (KeyboardInterrupt, EOFError):
+                print("\nGoodbye!")
+                break
 
 if __name__ == "__main__":
     asyncio.run(main())
