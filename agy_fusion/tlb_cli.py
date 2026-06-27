@@ -1,11 +1,9 @@
 import os
 import time
 import sqlite3
-import logging
 import json
 from config import CONFIG_PATHS, DB_PATH, COOLDOWN_SECONDS
-
-logger = logging.getLogger("agy_fusion.tlb")
+from ui import print_warning, print_error
 
 class TokenLoadBalancer:
     def init_db(self):
@@ -76,10 +74,10 @@ class TokenLoadBalancer:
         config_id = config_dict.get('config_id')
         
         if not config_id:
-            logger.error("mark_exhausted called without a config_id in the dict")
+            print_error("mark_exhausted called without a config_id in the dict")
             return
             
-        logger.warning(f"Marking config {config_dict['home']} ({config_id}) as exhausted. Reset in 5 hrs.")
+        print_warning(f"Marking config {config_dict['home']} ({config_id}) as exhausted. Reset in {COOLDOWN_SECONDS/3600:.1f} hrs.")
         with sqlite3.connect(DB_PATH) as db:
             cursor = db.execute('''
                 UPDATE config_pool 
@@ -88,7 +86,7 @@ class TokenLoadBalancer:
             ''', (reset_time, config_id))
             
             if cursor.rowcount == 0:
-                logger.error(f"mark_exhausted failed: {config_id} not found in DB.")
+                print_error(f"mark_exhausted failed: {config_id} not found in DB.")
             
             db.commit()
 

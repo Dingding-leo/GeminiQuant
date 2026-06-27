@@ -1,13 +1,9 @@
 import asyncio
-import logging
 import subprocess
 import os
-import tempfile
-import re
 from tlb_cli import tlb
 from config import MODEL_SONNET, MODEL_OPUS, MODEL_GEMINI_PRO, MODEL_GEMINI_FLASH
-
-logger = logging.getLogger("agy_fusion.orchestrator")
+from ui import run_with_spinner, print_header, print_success, print_error, print_warning, print_step, Colors
 
 # Phase 1: Assessor Prompt
 ASSESSOR_PROMPT = """You are a highly efficient Project Manager (Gemini 3.5 Flash).
@@ -110,9 +106,8 @@ async def run_agy_cli(prompt: str, model: str, max_retries: int = 3) -> str:
         env = os.environ.copy()
         env["HOME"] = fake_home
         
-        # Use -p to pass the prompt directly via argument, avoiding the non-existent 'ask' subcommand
-        cmd = [agy_bin, "--model", model, "-p", prompt]
-        logger.info(f"Running CLI for {model} using isolated binary: {os.path.basename(agy_bin)}")
+        # Dangerously skip permissions to avoid CLI waiting for stdin confirmations
+        cmd = [agy_bin, "--dangerously-skip-permissions", "--model", model, "-p", prompt]
         
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -131,50 +126,51 @@ async def run_agy_cli(prompt: str, model: str, max_retries: int = 3) -> str:
         else:
             err_lower = err_str.lower()
             if "limit exceeded" in err_lower or "quota" in err_lower or " 429 " in err_lower or "status: 429" in err_lower or "http 429" in err_lower:
-                logger.warning(f"Rate limit hit on {fake_home}. Marking exhausted.")
+                print_warning(f"\nRate limit hit on {os.path.basename(fake_home)}. Rotating account...")
                 tlb.mark_exhausted(config)
             else:
-                logger.error(f"agy CLI error: {err_str}")
                 raise Exception(f"agy CLI failed: {err_str}")
             
-            # Exponential backoff for rate limits
             await asyncio.sleep(2 ** attempt)
             continue
 
     raise Exception(f"Failed to call agy CLI after {max_retries} retries due to limits.")
 
 async def run_fusion(task_description: str):
-    logger.info("=== PHASE 1: Difficulty Assessment (Flash) ===")
+    print_header("PHASE 1: Difficulty Assessment")
     assessor_prompt = ASSESSOR_PROMPT.format(request=task_description)
     try:
-        assessment_res = await run_agy_cli(assessor_prompt, MODEL_GEMINI_FLASH)
-        logger.info(f"Assessor output snippet: {assessment_res[-100:].strip()}")
+        assessment_res = await run_with_spinner("Analyzing complexity with Gemini 3.5 Flash", run_agy_cli(assessor_prompt, MODEL_GEMINI_FLASH))
         is_hard = "<DIFFICULTY>HARD</DIFFICULTY>" in assessment_res.upper()
     except Exception as e:
-        logger.warning(f"Assessment failed, falling back to NORMAL: {e}")
+        print_warning(f"Assessment failed, falling back to NORMAL: {e}")
         is_hard = False
-    difficulty_label = "HARD (Routing to Opus)" if is_hard else "NORMAL (Routing to Sonnet)"
-    logger.info(f"Determined Difficulty: {difficulty_label}")
-
-    logger.info("=== PHASE 2: Parallel Deliberation ===")
-    pro_prompt = PRO_PROMPT.format(request=task_description)
-    pro_task = run_agy_cli(pro_prompt, MODEL_GEMINI_PRO)
-    
-    if is_hard:
-        claude_task = run_agy_cli(OPUS_PROMPT.format(request=task_description), MODEL_OPUS)
-    else:
-        claude_task = run_agy_cli(SONNET_PROMPT.format(request=task_description), MODEL_SONNET)
         
-    results = await asyncio.gather(pro_task, claude_task, return_exceptions=True)
+    difficulty_label = "HARD (Routing to Opus)" if is_hard else "NORMAL (Routing to Sonnet)"
+    print_step(f"Determined Difficulty: {Colors.BOLD}{difficulty_label}{Colors.RESET}")
+
+    print_header("PHASE 2: Parallel Deliberation")
+    pro_prompt = PRO_PROMPT.format(request=task_description)
+    
+    # We create the tasks but wait for them together
+    async def deliberate():
+        pro_task = asyncio.create_task(run_agy_cli(pro_prompt, MODEL_GEMINI_PRO))
+        if is_hard:
+            claude_task = asyncio.create_task(run_agy_cli(OPUS_PROMPT.format(request=task_description), MODEL_OPUS))
+        else:
+            claude_task = asyncio.create_task(run_agy_cli(SONNET_PROMPT.format(request=task_description), MODEL_SONNET))
+            
+        return await asyncio.gather(pro_task, claude_task, return_exceptions=True)
+
+    results = await run_with_spinner("Generating dual architectural proposals (Pro & Claude)", deliberate())
     
     if isinstance(results[0], Exception) or isinstance(results[1], Exception):
-        logger.error(f"One or both architects failed. Pro: {results[0]}, Claude: {results[1]}")
+        print_error(f"One or both architects failed. Pro: {results[0]}, Claude: {results[1]}")
         return None
     
-    pro_res = results[0]
-    claude_res = results[1]
+    pro_res, claude_res = results
         
-    logger.info("=== PHASE 3: Ultimate Judgment (Pro) ===")
+    print_header("PHASE 3: Ultimate Judgment")
     judge_prompt = JUDGE_PROMPT.format(
         request=task_description,
         prop1=pro_res,
@@ -182,19 +178,18 @@ async def run_fusion(task_description: str):
     )
     
     try:
-        blueprint = await run_agy_cli(judge_prompt, MODEL_GEMINI_PRO)
-        logger.info("Judge has synthesized the Ultimate Blueprint.")
+        blueprint = await run_with_spinner("Synthesizing Ultimate Blueprint (Gemini 3.1 Pro)", run_agy_cli(judge_prompt, MODEL_GEMINI_PRO))
     except Exception as e:
-        logger.error(f"Judgment failed: {e}")
+        print_error(f"Judgment failed: {e}")
         return None
 
-    logger.info("=== PHASE 4: Final Code Generation (Flash) ===")
+    print_header("PHASE 4: Final Code Generation")
     coder_prompt = CODER_PROMPT.format(request=task_description, blueprint=blueprint)
     
     try:
-        final_code = await run_agy_cli(coder_prompt, MODEL_GEMINI_FLASH)
-        logger.info("Final Code Generation complete.")
+        final_code = await run_with_spinner("Drafting production code (Gemini 3.5 Flash)", run_agy_cli(coder_prompt, MODEL_GEMINI_FLASH))
+        print_success("\nFusion processing successfully completed!")
         return final_code
     except Exception as e:
-        logger.error(f"Code Generation failed: {e}")
+        print_error(f"Code Generation failed: {e}")
         return None
