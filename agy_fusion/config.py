@@ -25,5 +25,5 @@ CONFIG_PATHS = [
     }
 ]
 
-DB_PATH = "tlb_state.db"
+DB_PATH = os.path.join(AGY_HOMES_DIR, "tlb_state.db")
 COOLDOWN_SECONDS = 5 * 3600  # 5 hours

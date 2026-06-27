@@ -1,6 +1,14 @@
+#!/usr/bin/env python3
 import asyncio
 import sys
+import os
 import logging
+
+# Make sure we can import local modules regardless of cwd
+script_dir = os.path.dirname(os.path.abspath(__file__))
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
+
 from tlb_cli import tlb
 from orchestrator_cli import run_fusion
 
@@ -8,7 +16,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(na
 
 async def main():
     if len(sys.argv) < 2:
-        print("Usage: python main.py '<task_description>'")
+        print("Usage: fusion '<task_description>'")
         sys.exit(1)
         
     task_description = sys.argv[1]
@@ -25,9 +33,10 @@ async def main():
         print("="*50)
         print(blueprint)
         
-        with open("blueprint.md", "w") as f:
+        blueprint_path = os.path.join(os.getcwd(), "blueprint.md")
+        with open(blueprint_path, "w") as f:
             f.write(blueprint)
-        print("\n[*] Blueprint saved to blueprint.md")
+        print(f"\n[*] Blueprint saved to {blueprint_path}")
     else:
         print("\n[!] Fusion process failed.")
 
